@@ -23,6 +23,7 @@ export class CreateIdiomDto {
   origin?: string;
   grammar?: string;
   imageUrl?: string;
+  createdAt?: string;
   analysis?: CreateCharacterAnalysisDto[];
   examples?: CreateExampleSentenceDto[];
 }

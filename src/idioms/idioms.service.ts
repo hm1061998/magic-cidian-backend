@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-return */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
-import { Injectable, ConflictException, HttpException } from '@nestjs/common';
+import { Injectable, HttpException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, ILike } from 'typeorm';
 import { IdiomEntity } from './entities/idiom.entity';
@@ -19,46 +19,95 @@ export class IdiomsService {
     if (process.env.API_KEY) {
       this.ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     } else {
+      console.warn('API_KEY is not set in environment variables');
       // throw new Error('API_KEY is not set in environment variables');
     }
   }
 
-  async findOne(query: string, mode: SearchMode) {
-    const normalizedQuery = query.toLowerCase().trim();
+  async findAll(page: number = 1, limit: number = 12, filter: string = '') {
+    const skip = (page - 1) * limit;
 
-    const dbIdiom = await this.idiomRepository.findOne({
-      where: [
-        { hanzi: normalizedQuery },
-        { pinyin: ILike(`%${normalizedQuery}%`) },
-        { vietnameseMeaning: ILike(`%${normalizedQuery}%`) },
+    // Xây dựng điều kiện tìm kiếm nếu có filter
+    const whereCondition = filter
+      ? [
+          { hanzi: ILike(`%${filter}%`) },
+          { pinyin: ILike(`%${filter}%`) },
+          { vietnameseMeaning: ILike(`%${filter}%`) },
+        ]
+      : {};
+
+    const [data, total] = await this.idiomRepository.findAndCount({
+      where: whereCondition,
+      order: { createdAt: 'DESC' },
+      select: [
+        'id',
+        'hanzi',
+        'pinyin',
+        'vietnameseMeaning',
+        'type',
+        'level',
+        'source',
       ],
-      relations: ['analysis', 'examples'],
+      take: limit,
+      skip: skip,
     });
 
-    if (dbIdiom) {
-      return { ...dbIdiom, dataSource: 'database' };
-    }
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        lastPage: Math.ceil(total / limit),
+      },
+    };
+  }
 
+  async search(query: string, mode: SearchMode) {
     if (mode === 'ai') {
       return this.callGeminiAI(query);
+    } else {
+      const normalizedQuery = query.toLowerCase().trim();
+
+      const dbIdiom = await this.idiomRepository.findOne({
+        where: [
+          { hanzi: normalizedQuery },
+          { pinyin: ILike(`%${normalizedQuery}%`) },
+          { vietnameseMeaning: ILike(`%${normalizedQuery}%`) },
+        ],
+        relations: ['analysis', 'examples'],
+      });
+
+      if (dbIdiom) {
+        return { ...dbIdiom, dataSource: 'database' };
+      }
     }
 
     throw new HttpException('Không tìm thấy từ này trong thư viện.', 400);
   }
 
   async create(createIdiomDto: CreateIdiomDto) {
-    // Kiểm tra trùng lặp dựa trên Hanzi
+    // 1. Kiểm tra xem từ đã tồn tại chưa
     const existing = await this.idiomRepository.findOne({
       where: { hanzi: createIdiomDto.hanzi },
+      relations: ['analysis', 'examples'], // Load quan hệ để orphanRemoval hoạt động đúng
     });
 
     if (existing) {
-      throw new ConflictException(
-        `Thành ngữ "${createIdiomDto.hanzi}" đã tồn tại.`,
-      );
+      // 2. Nếu TỒN TẠI: Cập nhật (Update)
+      // Merge thông tin cơ bản
+      this.idiomRepository.merge(existing, createIdiomDto);
+
+      // Gán lại mảng quan hệ để kích hoạt orphanRemoval (xóa cũ, thêm mới)
+      // Dùng 'as any' để bypass check type strict của TypeORM khi gán DTO object vào Entity relation
+      existing.analysis = (createIdiomDto.analysis || []) as any;
+      existing.examples = (createIdiomDto.examples || []) as any;
+
+      return await this.idiomRepository.save(existing);
     }
 
-    // Do entity đã config cascade: true, việc lưu idiom sẽ tự động lưu cả analysis và examples
+    createIdiomDto.createdAt = `${new Date().getTime() / 1000}`;
+    // 3. Nếu CHƯA TỒN TẠI: Tạo mới (Insert)
     const newIdiom = this.idiomRepository.create(createIdiomDto);
     return await this.idiomRepository.save(newIdiom);
   }
@@ -103,26 +152,31 @@ export class IdiomsService {
       },
     };
 
-    const response = await this.ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: `Phân tích chuyên sâu quán dụng ngữ/thành ngữ tiếng Trung: "${query}". Trả về kết quả JSON theo schema hỗ trợ người Việt học tập.`,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: schema,
-      },
-    });
-
-    const text = response.text || '{}';
-    // Loại bỏ markdown code block nếu AI lỡ thêm vào (dù đã set json mode)
-    const cleanJson = text.replace(/```json\n?|\n?```/g, '').trim();
-
     try {
-      const data = JSON.parse(cleanJson);
-      return { ...data, dataSource: 'ai' };
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const response = await this.ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: `Phân tích chuyên sâu quán dụng ngữ/thành ngữ tiếng Trung: "${query}". Trả về kết quả JSON theo schema hỗ trợ người Việt học tập.`,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: schema,
+        },
+      });
+
+      const text = response.text || '{}';
+      // Loại bỏ markdown code block nếu AI lỡ thêm vào (dù đã set json mode)
+      const cleanJson = text.replace(/```json\n?|\n?```/g, '').trim();
+
+      try {
+        const data = JSON.parse(cleanJson);
+        return { ...data, dataSource: 'ai' };
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      } catch (err) {
+        console.error('Failed to parse JSON from AI', cleanJson);
+        throw new Error('AI trả về dữ liệu không hợp lệ.');
+      }
     } catch (err) {
-      console.error('Failed to parse JSON from AI', cleanJson);
-      throw new Error('AI trả về dữ liệu không hợp lệ.');
+      console.error('Chưa cấu hình mô hình AI');
+      throw new HttpException('Chưa cấu hình mô hình AI', 400);
     }
   }
 }

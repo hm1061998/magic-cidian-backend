@@ -1,12 +1,11 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access */
-/* eslint-disable @typescript-eslint/no-unsafe-return */
-/* eslint-disable @typescript-eslint/no-unsafe-call */
 import {
   Entity,
   Column,
   PrimaryGeneratedColumn,
   OneToMany,
   ManyToOne,
+  CreateDateColumn,
+  Index,
 } from 'typeorm';
 
 @Entity('idioms')
@@ -14,9 +13,11 @@ export class IdiomEntity {
   @PrimaryGeneratedColumn()
   id: string;
 
+  @Index() // Index cho tìm kiếm chính xác
   @Column({ unique: true })
   hanzi: string;
 
+  @Index() // Index cho tìm kiếm pinyin
   @Column()
   pinyin: string;
 
@@ -51,6 +52,9 @@ export class IdiomEntity {
 
   @Column({ nullable: true })
   imageUrl: string;
+
+  @CreateDateColumn()
+  createdAt: Date;
 
   @OneToMany(() => CharacterAnalysisEntity, (analysis) => analysis.idiom, {
     cascade: true,

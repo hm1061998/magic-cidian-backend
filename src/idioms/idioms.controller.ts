@@ -9,9 +9,18 @@ export type SearchMode = 'database' | 'ai';
 export class IdiomsController {
   constructor(private readonly idiomsService: IdiomsService) {}
 
+  @Get()
+  async findAll(
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 12,
+    @Query('filter') filter: string = '',
+  ) {
+    return this.idiomsService.findAll(Number(page), Number(limit), filter);
+  }
+
   @Get('search')
   async search(@Query('query') query: string, @Query('mode') mode: SearchMode) {
-    return this.idiomsService.findOne(query, mode);
+    return this.idiomsService.search(query, mode);
   }
 
   @Post()

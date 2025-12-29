@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/require-await */
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -10,6 +11,7 @@ import {
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { UserModule } from './user/user.module';
 import { IdiomsModule } from './idioms/idioms.module';
+
 // postgresql://postgres:yzboxmbzJXGmzXyrblpeKTiyMdWAqaTF@ballast.proxy.rlwy.net:52331/railway
 @Module({
   imports: [
